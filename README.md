@@ -15,3 +15,5 @@
 - **SPSC Ring Buffer**: Lock-free queue separating raw network/file ingestion from book state processing.
 - **Fast Order Book Layout**: Constant-time O(1) order additions and cancellations across price levels.
 - **Latency Profiling**: Microsecond-accurate distribution tracking (p50, p99, p99.9) using HDR histograms.
+
+used the data in this link here: https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/ and the name of the file is 08302019.NASDAQ_ITCH50.gz
