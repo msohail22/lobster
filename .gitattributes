@@ -1,0 +1,13 @@
+# Store everything with LF line endings
+* text=auto eol=lf
+
+# Treat .h files as C++ on GitHub (if you add headers later)
+*.h  linguist-language=C++
+
+# Terraform lock file is auto-generated
+.terraform.lock.hcl  linguist-generated=true
+
+# Binary files: no diffs, no line-ending changes
+*.png  binary
+*.jpg  binary
+*.ico  binary
