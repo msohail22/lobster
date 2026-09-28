@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>lobster</title>
+  <defs>
+    <!-- left claw; the right one is its mirror -->
+    <g id="claw">
+      <path d="M226 206 C 196 206, 166 196, 150 168" fill="none" stroke="#E0393E" stroke-width="20" stroke-linecap="round"/>
+      <path d="M128 176 C 88 152, 84 88, 116 44 C 128 78, 138 98, 148 114 C 152 96, 160 80, 176 64 C 190 102, 184 148, 160 176 Q 144 186, 128 176 Z" fill="#E0393E"/>
+    </g>
+    <!-- one database disk: body with a rounded bottom, lighter top face -->
+    <g id="disk">
+      <path d="M-1 0 V 1 A 1 0.28 0 0 0 1 1 V 0 Z" fill="#E0393E"/>
+      <ellipse cx="0" cy="0" rx="1" ry="0.28" fill="#F26066"/>
+    </g>
+  </defs>
+
+  <!-- antennae -->
+  <path d="M240 170 C 228 120, 206 92, 186 70" fill="none" stroke="#A8232A" stroke-width="7" stroke-linecap="round"/>
+  <path d="M272 170 C 284 120, 306 92, 326 70" fill="none" stroke="#A8232A" stroke-width="7" stroke-linecap="round"/>
+
+  <use href="#claw"/>
+  <use href="#claw" transform="translate(512 0) scale(-1 1)"/>
+
+  <!-- tail fan -->
+  <g fill="#A8232A">
+    <path d="M256 400 L 216 452 Q 236 466 256 458 Z"/>
+    <path d="M256 400 L 296 452 Q 276 466 256 458 Z"/>
+    <path d="M250 404 L 194 436 Q 196 456 216 452 Z"/>
+    <path d="M262 404 L 318 436 Q 316 456 296 452 Z"/>
+  </g>
+
+  <!-- head -->
+  <path d="M206 236 C 206 170, 232 150, 256 150 C 280 150, 306 170, 306 236 Z" fill="#E0393E"/>
+  <circle cx="238" cy="186" r="7" fill="#1E1E1E"/>
+  <circle cx="274" cy="186" r="7" fill="#1E1E1E"/>
+  <!-- body: stacked database disks, narrowing toward the tail -->
+  <g transform="translate(256 356) scale(42 40)"><use href="#disk"/></g>
+  <g transform="translate(256 300) scale(52 44)"><use href="#disk"/></g>
+  <g transform="translate(256 240) scale(62 46)"><use href="#disk"/></g>
+
+</svg>

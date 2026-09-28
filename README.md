@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/lobster.png" width="160" alt="lobster logo" />
+  <img src="assets/lobster.svg" width="160" alt="lobster logo" />
   <h1>lobster</h1>
   <p><b>A database written in C++.</b></p>
 </div>
