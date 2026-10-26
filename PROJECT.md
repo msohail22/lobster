@@ -1,6 +1,6 @@
 # lobster
 
-A single-machine columnar analytical engine in C++20, plus the C++ learning path
+A single-machine columnar analytical engine in C++23, plus the C++ learning path
 that goes with it.
 
 - Owner: Mohammed Sohail
@@ -80,7 +80,7 @@ idea. cppreference is the main language reference.
 
 ## Purpose and scope
 
-lobster is a single-machine columnar analytical engine in C++20. It imports CSV
+lobster is a single-machine columnar analytical engine in C++23. It imports CSV
 data, stores it by column with compression, and runs a small SQL subset fast
 enough to measure against DuckDB.
 
@@ -258,7 +258,7 @@ never with sanitizers.
 
 | ID | Requirement |
 |---|---|
-| ER-1 | C++20, built with CMake. Builds with both GCC and Clang without warnings at `-Wall -Wextra`. |
+| ER-1 | C++23, built with CMake. Builds with both GCC and Clang without warnings at `-Wall -Wextra`. |
 | ER-2 | Dependencies: LZ4 and GoogleTest only (plus DuckDB as an external tool for testing). Everything else is your own code. |
 | ER-3 | Debug, release and sanitizer builds are each one command (CMake presets, or documented commands). |
 | ER-4 | GitHub Actions CI on every push: build with GCC and Clang, unit tests, sanitizer run, DuckDB comparison. |
