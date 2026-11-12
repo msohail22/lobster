@@ -1,368 +1,539 @@
-# lobster — plan
+# lobster
 
-Last updated: 2026-11-12
+*A plan, and the reasoning behind it.*
 
-## What this is
+Last updated 2026-11-12.
 
-An in-memory key-value store. memcached text protocol, two commands, one
-shard per core, kernel-bypass network path.
+---
 
-In one line: **memcached, rewritten the way a trading system would be
-written.**
+## Contents
 
-It is not a cache project. It is a latency project wearing a cache as a
-costume, because a cache is the simplest thing that still needs a network, a
-data structure and a thread model at the same time.
+1. [The idea](#1-the-idea)
+2. [The machine, and what it forbids](#2-the-machine-and-what-it-forbids)
+3. [The language](#3-the-language)
+4. [The eight weeks](#4-the-eight-weeks)
+5. [Why anyone should care — the hiring evidence](#5-why-anyone-should-care)
+6. [The rules](#6-the-rules)
+7. [The topics](#7-the-topics)
+8. [The long game — milestones M0 to M34](#8-the-long-game)
+9. [What it costs — time and code](#9-what-it-costs)
+10. [How it is built — dependencies, layout, scaffolding](#10-how-it-is-built)
+11. [Open questions](#11-open-questions)
 
-## Why a key-value store
+---
 
-`GET` is the shortest possible unit of work:
+# 1. The idea
 
-```
-packet arrives -> parse 20 bytes -> hash a key -> one memory lookup -> reply
-```
+Build an in-memory key-value store. Two commands, `GET` and `SET`, over UDP,
+speaking the memcached text protocol. Nothing else, ever.
 
-There is nowhere for time to hide. No disk, no algorithm, no computation. So
-when p99.9 is 40 us instead of 2 us, the cause is certainly one of: the
-kernel, the NIC, a cache miss, a NUMA hop, or the scheduler.
-
-Everyday comparison: you cannot study your reaction time while juggling. You
-study it by pressing one button. `GET` is the button.
-
-## The machine this runs on
-
-Measured 2026-11-12. Every milestone below is judged against this, not
-against a server.
+Then build it **three times**, and measure which one is faster.
 
 ```
-CPU      AMD Ryzen 5 5500U, Zen 2, 6 cores / 12 threads, 1 socket
-         AVX2 yes, AVX-512 no. constant_tsc + nonstop_tsc.
-         cat_l3, mba, rdt_a present — cache allocation works on AMD.
-L3       2 x 4 MB, NOT one shared block
-NUMA     1 node — remote-memory cost cannot be measured here
-RAM      7 GB total, about 3 GB available
-Kernel   7.2.15-1-omarchy. CONFIG_XDP_SOCKETS=y, CONFIG_NO_HZ_FULL=y,
-         CONFIG_CPU_ISOLATION=y, CONFIG_X86_CPU_RESCTRL=y
-         No isolcpus and no nohz_full on the current command line
-Idle     acpi_idle driver (POLL, C1, C2, C3) — NOT intel_idle
-Governor acpi-cpufreq, schedutil, boost on
-NIC      wlp2s0, iwlwifi. THE ONLY NIC. No Ethernet port.
-PTP      /dev/ptp0 exists but is iwlwifi-PTP, useless for microseconds
+Design A   one shared hash table behind striped mutexes
+Design B   shard per core: one pinned thread, its own slice of the table,
+           its own listener, an SPSC ring mesh between cores
+Design C   Design B, but each core gets its own io_uring ring
+```
+
+That is the whole project. It sounds small because it is small. The point is
+not the cache.
+
+## Why a cache at all
+
+Because `GET` is the shortest honest unit of work anyone has invented:
+
+```
+packet arrives → parse 20 bytes → hash a key → one memory lookup → reply
+```
+
+There is nowhere for the time to hide. No disk, no algorithm, no computation.
+So when p99.9 comes back at 40 µs instead of 2 µs, the cause is certainly one
+of five things: the kernel, the NIC, a cache miss, a NUMA hop, or the
+scheduler. You can find out which. In a bigger program you cannot.
+
+You cannot study your reaction time while juggling. You study it by pressing
+one button. `GET` is the button.
+
+## Why three designs and not one
+
+Because one design proves nothing.
+
+"Shard-per-core is faster than a shared table" is a thing everyone says. It
+is in every Seastar talk and every ScyllaDB blog post. Build only the fast
+version and you have repeated the claim. Build the slow one first, measure
+it, then beat it, and you have *made* the claim.
+
+**Design A exists to be beaten.** It is a week of work whose entire purpose
+is to be the number in the left-hand column. That week is not overhead; it is
+the experiment.
+
+## What the project actually is, then
+
+A latency project wearing a cache as a costume. A cache is simply the
+simplest thing that still needs all three of a network, a data structure and
+a thread model at the same time — which is what makes it a place where you
+can learn anything at all.
+
+## Fixed scope
+
+**In:** `GET` and `SET`. memcached text protocol. UDP. Loopback.
+
+**Out, permanently:** lists, sets, counters, TTL semantics beyond a plain
+expiry, clustering, replication, durability guarantees.
+
+The feature set is deliberately tiny so that the effort lands on the topics
+in section 7, not on features. Every time this document is tempted toward a
+feature, that is the sentence to re-read.
+
+## Where it stands today
+
+Empty. `src/main.cpp` prints a line and exits. Everything in this document is
+still to do.
+
+---
+
+# 2. The machine, and what it forbids
+
+Everything below was measured on 2026-11-12, not remembered. This matters
+more than it usually would, because this machine rules out about a third of
+what a plan like this would normally contain.
+
+```
+CPU       AMD Ryzen 5 5500U, Zen 2, 6 cores / 12 threads, 1 socket
+          AVX2 yes, AVX-512 no. constant_tsc + nonstop_tsc.
+          cat_l3, mba, rdt_a present — cache allocation works on AMD.
+L3        2 × 4 MB, NOT one shared block
+NUMA      1 node
+RAM       7 GB total, about 3 GB available
+Kernel    7.2.15-1-omarchy
+          CONFIG_XDP_SOCKETS=y, CONFIG_NO_HZ_FULL=y,
+          CONFIG_CPU_ISOLATION=y, CONFIG_X86_CPU_RESCTRL=y
+          No isolcpus and no nohz_full on the current command line
+Idle      acpi_idle driver (POLL, C1, C2, C3) — NOT intel_idle
+Governor  acpi-cpufreq, schedutil, boost on
+NIC       wlp2s0, iwlwifi. THE ONLY NIC. No Ethernet port.
+PTP       /dev/ptp0 exists but is iwlwifi-PTP, useless at microseconds
 Hugepages HugePages_Total = 0, pdpe1gb present, THP = always
 Toolchain GCC 16.2.1, Clang 23.1.3, both build -std=c++26. C++23 is set.
 ```
 
-Three consequences that shape everything:
+Read that as three sentences:
 
-1. **Loopback is the only transport.** The kernel UDP round trip on loopback
-   is roughly 10 us. The hash table is roughly 100 ns. So an end-to-end
-   number cannot see Phase 1 work at all. Phase 1 is measured by an
-   **in-process microbenchmark**, and only Phase 2 onward by end-to-end runs.
-2. **No wired NIC means no RSS, no real bypass, no hardware timestamping.**
-   Those milestones are marked `BLOCKED` with what would unblock them. They
-   stay in the list; they are not deleted.
-3. **Six cores must hold the server, the load generator and the desktop.**
-   Two shards, not four, in every experiment.
+**There is one network card and it is WiFi.** So there is no RSS, no DPDK, no
+hardware timestamping, and no real kernel bypass. Four milestones in section
+8 are marked `BLOCKED` because of this single line. They are not deleted —
+the reasoning in them is still correct, and a second machine with a wired
+Intel NIC would unblock them tomorrow.
 
-## Language
+**There is one NUMA node.** So remote-memory cost cannot be observed at all.
+The NUMA code gets written correctly, with `hwloc` and `libnuma`, and then
+nothing is learned from running it. That is an honest outcome and it is
+recorded as one.
 
-**C++, C++23, Clang.** Decided 2026-11-12, not revisited.
+**Six cores must hold the server, the load generator and the desktop.** Two
+shards, not four, in every experiment in this document. Any number produced
+here is a *relative* A/B, never an absolute, because the client and the
+server are fighting over the same cache.
 
-The reasons, in order: `std::atomic` with an explicit memory model is what
-makes M12 and M13 writable at all; templates give the M12 and M13 comparisons
-for free instead of three copies of a benchmark; `std::start_lifetime_as`
-makes the zero-copy packet cast of M7 legal rather than technically
-undefined; and this is the language the field it points at actually uses.
-
-The cost, stated plainly: C++ makes it easy to be accidentally slow.
-`std::string`, `std::function`, `shared_ptr` and a range view in a loop each
-add an allocation or an indirect call without complaining. C cannot betray
-you that way. The discipline that answers this is in Dependencies below: the
-hot path is "C with templates", and the comfortable C++ stays out of it.
-
-Everything from M16 down is a C API — `liburing`, `libbpf`, AF_XDP — so
-expect C-shaped code inside `.cpp` files, wrapped thinly and not prettified.
-
-## The two-month plan
-
-**Budget: 8 weeks, 8 hours a week, 64 hours total.** Set 2026-11-12,
-rewritten 2026-11-12 after the hiring research below.
-
-This is the plan being worked. Everything under Milestones is the long game,
-kept because it is still correct, not because any of it happens inside these
-64 hours. v1 (M0 to M13b) is 24 to 35 weeks and does not fit.
-
-### The one concept this project demonstrates
-
-**Shard-per-core, share-nothing**: one pinned thread per core, each owning
-its own slice of the hash table, talking to other cores only through
-hand-written lock-free SPSC queues, with `io_uring` as each core's I/O
-backend. The Seastar model.
-
-It was chosen over kernel bypass, AF_XDP and `io_uring` alone because it is
-the only candidate that is both buildable on this machine and forces the two
-things the evidence points at: lock-free queues with explicit memory
-ordering, and a named kernel I/O interface. The evidence is in Hiring
-evidence below.
-
-### What ships: the same store, built three times
-
-The project is one key-value store with three thread models, so the
-architecture becomes a measurement instead of a belief.
-
-```
-Design A   one shared hash table, striped mutexes, N threads
-Design B   shard-per-core: one pinned thread per core, its own table slice,
-           SO_REUSEPORT listener per core, SPSC ring mesh for cross-core keys
-Design C   Design B, with each core's epoll loop replaced by its own
-           io_uring ring (single issuer, DEFER_TASKRUN, multishot recv)
-```
-
-Two commands, `GET` and `SET`. UDP, memcached text protocol, loopback.
-
-**Design A exists only to be beaten.** Without it, "share-nothing is faster"
-is an assumption. With it, it is a number.
-
-| Week | Hours | Work | Produces |
-|---|---|---|---|
-| 1 | 8 | **M0** single-thread `epoll` server, `GET` and `SET`, `std::unordered_map`. Build scaffolding: `lobster_core` library, GTest wired, the hanging smoke test fixed | a server that answers |
-| 2 | 10 | **M1a** open-loop UDP load generator, recording latency from the intended send time. About 400 lines, and the thing every later number depends on | a client that measures honestly |
-| 3 | 8 | **M2** `clock_gettime` vs `rdtsc`, TSC invariance confirmed, HdrHistogram wired. **M2d** A/A noise floor, three runs. **M2b** `env.sh` with a check mode | the first trustworthy row in NUMBERS.md |
-| 4 | 8 | **Design A** — **M13a**: multi-thread, one shared table behind striped mutexes, then a spinlock with backoff | the baseline to beat |
-| 5 | 10 | **Design B** — **M3** own hash table, **M10** shard per core with pinned threads and `SO_REUSEPORT`, **M11** key-derived source port | a sharded store |
-| 6 | 10 | **M12** hand-written SPSC ring mesh for the keys the port trick cannot place. Padded with `std::hardware_destructive_interference_size`, measured 64 on this CPU. TSan clean. False sharing measured with the padding present and removed | the hardest and most asked-about part |
-| 7 | 8 | **Design C** — **M16** one `io_uring` ring per core. A/B against `epoll`. Then **M6b** `perf stat` and `perf c2c` across all three designs | the three-way comparison |
-| 8 | 6 | Write up NUMBERS.md and the README as one story | the artifact |
-
-Total 64 hours. Weeks 2, 5 and 6 are deliberately over budget and week 8
-under, because the load generator and the SPSC queue always overrun, and the
-final week is writing rather than coding.
-
-### The deliverable
-
-A README with five things, because these five are what a hiring conversation
-can be had about:
-
-1. Throughput against server core count, 1 to 4, for all three designs.
-2. p99 and p99.9 at a fixed offered rate, for all three designs.
-3. `perf stat` counters per design: cache misses, context switches, IPC.
-4. One **`perf c2c`** before and after, showing a false-sharing problem found
-   and removed.
-5. A **TSan-clean** SPSC queue with tests.
-
-### Honest limits, to be stated in the README itself
-
-- Everything runs over loopback, with client and server sharing six cores.
-  Every number is a relative A/B, never an absolute.
-- The `io_uring` versus `epoll` gap on loopback may be small. **That is a
-  finding, not a failure**, and the README says why: a PVLDB 2026 paper
-  measured a drop-in swap at only 1.10x.
-- Zero-copy receive and NAPI busy-poll cannot be shown at all: both need NIC
-  support this machine does not have.
-- One NUMA node, so NUMA placement is written correctly and never measured.
-
-### Why this order and not another
-
-- **M1a before anything optimised.** Without an open-loop generator, every
-  later number is a lie by coordinated omission. Week 2, not week 6.
-- **M2b and M2d before Design A.** Fixing the governor and establishing the
-  noise floor costs part of one week and makes the following four weeks mean
-  something. Skipping them is how a project produces thirty rows of noise.
-- **Design A before Design B.** The comparison is the result. Building only
-  the fast one proves nothing.
-- **M12 in its own week.** It is the single most interview-cited topic in
-  this plan and the easiest to get subtly wrong.
-- **`io_uring` last.** The PVLDB paper is explicit that it only pays off
-  inside this architecture, so the architecture has to exist first.
-
-### Topics covered in the eight weeks
-
-Roughly **26 of 85**. Each is ticked in the Topics section when its week
-finishes.
-
-**CPU and memory (6):** cache lines and false sharing (`perf c2c`, week 6);
-cache-aware data layout; memory ordering, barriers and `std::atomic`; store
-buffers and memory disambiguation; data-oriented design, AoS vs SoA;
-frequency scaling, turbo and throttling.
-
-**Concurrency (7):** lock-free algorithms; SPSC, MPSC and MPMC queues;
-seqlocks (on Design A); spinlocks, backoff and futexes; thread affinity,
-pinning and isolation; shard per core, share nothing; the ABA problem and CAS
-loops (on Design A's free list).
-
-**Kernel and I/O (5):** syscall cost and vDSO; `epoll` and event loops;
-`io_uring`; scheduler classes, `isolcpus` and `nohz_full`; C-states and
-P-states via `/dev/cpu_dma_latency`.
-
-**Networking (2):** consistent hashing and flow affinity; protocol framing.
-
-**Measurement (6):** `rdtsc` and `clock_gettime`; latency distributions,
-p99.9 and coordinated omission; HdrHistogram; `perf` and hardware counters;
-microbenchmarking pitfalls; queueing theory and Little's law (week 3's
-utilisation curve).
-
-### What is cut, and the cost
-
-| Cut | What is lost |
-|---|---|
-| **M4** slab allocator | variable-length value management. Values are fixed-size in these eight weeks |
-| **M7** zero-copy parse | `std::start_lifetime_as` and the no-allocation parse path |
-| **M5** hugepages | TLB behaviour unexamined |
-| **M6** prefetch and batching | overlapping memory trips, `recvmmsg` |
-| **M8** boot-time isolation | `isolcpus` and `nohz_full` need a reboot; the no-reboot half survives in M2b |
-| **M1** conformance oracle | correctness checked by hand, not diffed against real `memcached` |
-| **M9, M9b** | SMT and container studies |
-| **M33** full utilisation curve | reduced to finding the knee once, in week 3 |
-| **Everything in v2** | AF_XDP, DPDK, SIMD, TCP, eviction, persistence |
-
-Topic coverage drops from 81 to about 26 of 85. That is the price of eight
-weeks, written here so it is a decision rather than a surprise.
-
-### Rules for the eight weeks
-
-- **A week that overruns loses its next item, not its measurement.** Drop
-  scope, never drop the NUMBERS.md row.
-- **M1a, M2, M2b, M2d and Design A are not negotiable.** They are the
-  difference between a project with results and a project with anecdotes. If
-  time runs out, cut Design C instead — two designs compared honestly beats
-  three compared badly.
-- **No new topics.** Anything interesting found along the way goes into Open
-  questions at the bottom of this file, not into these eight weeks.
-- **Week 8 is for writing.** A measured project nobody can read is not
-  finished.
-
-### Hiring evidence
-
-Gathered 2026-11-12 from job postings and public sources. Quoted verbatim
-where the text was retrievable.
-
-- **QRT**, Core Trading Technology, posted 2026-05-08: *"Familiarity with
-  scalable I/O models (e.g., epoll, io_uring), lock-free structures, and
-  concurrent programming"*. This single line covers the whole project.
-- **Jane Street**, Low-Latency Engineer: *"Some experience with fast-packet
-  processing in user space and common kernel-bypass implementations would be
-  ideal (such as Solarflare OpenOnload/TCPDirect/ef_vi, Exablaze, InfiniBand
-  verbs, DPDK)"*, and separately *"can you describe modern x86 AMD and Intel
-  cache hierarchies?"*. The first is impossible on this hardware; the second
-  is answered by week 7's `perf c2c` output.
-- **Meta**, Host Networking, preferred: *"DPDK, eBPF/XDP, AF_XDP, io_uring"*
-  and *"kernel bypass, zero-copy I/O, and RDMA/RoCEv2"*.
-- **Cloudflare**, Spectrum, posted 2026-07-31: *"sockets, eBPF, network
-  namespaces, netfilter/nftables, tc"*.
-- **HRT** interview guide: *"what does C++'s `memory_order_acquire` actually
-  guarantee on x86 vs ARM?"* — week 6, exactly.
-- **HRT and Optiver name no technology at all.** Optiver's whole ask is *"2+
-  years preferred of C++ experience in low-latency systems"*. For those firms
-  the keyword matters less than reasoning about performance with numbers,
-  which is what NUMBERS.md is for.
-- **PVLDB 2026** on `io_uring`: a drop-in swap measured **1.10x** over
-  `epoll`, and *"Treating io_uring as a drop-in replacement in a traditional
-  I/O-worker design is inadequate."* It recommends ring-per-thread, single
-  issuer. That is this architecture, and it is why Design C comes last.
-- **ScyllaDB** merged an asymmetric `io_uring` Seastar backend on 2026-07-22,
-  so this is live work rather than a settled topic.
-- **DPDK is not declining.** DPDK Summit Stockholm ran 2026-05 on DPDK 26.03.
-  It is simply unavailable here.
-
-**Stated plainly: no posting found names "shard-per-core" or "Seastar" as a
-requirement.** The choice rests on what postings do name, what is buildable
-on this hardware, and the PVLDB finding. It is a judgement, not a measured
-ranking.
-
-Unverified: ScyllaDB and ClickHouse posting text (pages closed); Citadel, IMC
-and Jump postings (not retrieved); Katran's current production status;
-Google's `io_uring` stance after 2023. The Jane Street and HRT quotes come
-from Built In copies rather than the official pages, and the interview
-material is from prep sites, not verified candidate reports.
-
-### Five questions to expect, and where each is answered
-
-1. In your SPSC queue, which memory order is on each load and store, and what
-   breaks on ARM if the release store is relaxed? — week 6
-2. A `GET` lands on core 2 for a key owned by core 5. Walk the path. What
-   does the hop cost at p99, and how do real systems avoid it? — weeks 5
-   and 6
-3. Why `DEFER_TASKRUN` with a single issuer? When is `SQPOLL` wrong on a
-   six-core box? — week 7
-4. Your `io_uring` versus `epoll` delta on loopback was X. Why? What changes
-   with a real NIC? — week 7, and the honest-limits paragraph
-5. Describe the Zen 2 cache hierarchy, and show which counters moved when you
-   fixed the layout. — week 7's `perf c2c` before and after
-
-### After the eight weeks
-
-The next three, in order, about two weeks each: **M4** the slab allocator
-(variable-length values, the obvious gap), **M7** zero-copy parse, then
-**M18** AF_XDP on a `veth` pair. A natural second two-month block.
-
-## Scope, fixed
-
-- **In:** `GET`, `SET`. memcached text protocol, then a binary variant for
-  comparison.
-- **Out, permanently:** lists, sets, counters, TTL semantics beyond a plain
-  expiry, clustering, replication, durability guarantees.
-
-The feature set is deliberately tiny so that effort lands on the topics
-below, not on features.
-
-## Rules
-
-- **Nothing lands without a number.** A performance claim carries the command
-  that produced it and the date it was measured.
-- **p99.9, never averages.** Record p50, p99, p99.9 and max. The max is
-  always something stupid; find out what.
-- **Measure before removing.** A milestone that deletes a layer must first
-  record what that layer cost.
-- **Open-loop load only.** A closed-loop benchmark hides the tail. See
-  coordinated omission below.
-- **No allocation on the hot path.** Everything pre-allocated at startup.
-- **No fallback paths.** When an operation fails, let the error propagate.
-- **An external oracle decides correctness.** Real `memcached` and a real
-  memcached client library are the reference for protocol behaviour, so a bug
-  cannot be shipped as a feature. They are *not* the latency scoreboard:
-  `memtier_benchmark` has no UDP request transport, so the load generator is
-  written by hand (M1a).
-- **Noise floor before any claim.** An A/A run — the same binary against
-  itself — comes before M3 and is repeated whenever the machine changes. A
-  difference smaller than the noise floor is not a result.
-- **Three runs minimum.** One run is an anecdote. Record the spread.
-- **When a milestone makes it slower, that is a result, not a failure.**
-  Keep the code behind a compile-time flag, record the row with the
-  regression, and write down why. Never silently revert and never delete the
-  row.
-- **When a milestone is blocked by hardware, record it and move on.** Mark it
-  `BLOCKED`, write what would unblock it, and go to the next one. A blocked
-  milestone never stops the project.
-- **One milestone at a time.** Finish it, measure it, record the row, move.
-
-## The eight parts
-
-Every topic maps to one of these.
-
-```
-  +- RX -------+ +- PARSE --+ +- STORE --------+ +- TX -------+
-  | poll-mode  | | memcache | | hash table +   | | batched    |
-  | driver     |>| text     |>| slab allocator |>| replies    |
-  +------------+ +----------+ +----------------+ +------------+
-        ^              ^              ^                ^
-        +---- SHARD MODEL: one core owns one slice -----+
-                             |
-               HARNESS: histogram, perf, memtier
-                             |
-               BUILD: LTO, PGO, disassembly
-```
-
-## Current state
-
-Empty. `src/main.cpp` prints a line and exits. Everything below is to do.
+One more consequence, and it is the one that quietly shapes the whole
+schedule: **the kernel UDP round trip on loopback costs roughly 10 µs, and
+the hash table costs roughly 100 ns.** An end-to-end measurement therefore
+cannot see the data structure at all — the signal is one part in a hundred.
+This is why there is an in-process microbenchmark in week 3 and why the week
+ordering looks the way it does.
 
 ---
 
-# Topics
+# 3. The language
 
-The core topics of low-latency systems work, and where each is used in this
-project. A topic is ticked when it has been implemented and measured here,
-not when it has been read about.
+**C++, C++23, Clang.** Decided 2026-11-12, not to be revisited.
+
+Four reasons, in order of how much they matter:
+
+1. **`std::atomic` with an explicit memory model.** Week 6 is a hand-written
+   SPSC queue. Without a specified memory model that week is guesswork.
+2. **Templates make the comparisons free.** Weeks 4 to 7 compare three thread
+   models and several queue types. One benchmark harness templated over the
+   type, rather than three copies of it that drift apart.
+3. **`std::start_lifetime_as`.** It makes casting a received packet buffer to
+   a struct legal rather than technically undefined. C has no equivalent.
+4. **It is the language of the field this points at.** Not a technical
+   argument, but an honest one.
+
+And the cost, stated plainly: **C++ makes it easy to be accidentally slow.**
+`std::string`, `std::function`, `shared_ptr`, a range view inside a loop —
+each quietly adds an allocation or an indirect call and never complains. C
+cannot betray you that way.
+
+The discipline that answers this is simple and it is a rule, not a
+preference: **the hot path is written as "C with templates".** No allocation,
+no virtual calls, no exceptions, no standard containers. The comfortable C++
+— RAII, `std::expected`, ranges, `std::print` — lives in startup, config,
+tests and the load generator, and never crosses into a `GET`.
+
+Expect C-shaped code inside `.cpp` files from week 7 onward, wrapped thinly
+and not prettified, because `liburing`, `libbpf` and AF_XDP are all C APIs.
+
+---
+
+# 4. The eight weeks
+
+**64 hours. Eight weeks, eight hours a week.** Set 2026-11-12.
+
+This is the part that is actually committed. Section 8 contains a roadmap of
+35 milestones that would take 13 to 19 months; it is kept because the
+reasoning in it is correct, not because any of it happens inside these 64
+hours.
+
+Full v1 of that roadmap — milestones M0 to M13b — is 24 to 35 weeks. It does
+not fit. What follows was chosen for **learning per hour**, not for
+completeness.
+
+## The one concept being demonstrated
+
+**Shard-per-core, share-nothing.** One pinned thread per core, each owning
+its own slice of the hash table, talking to other cores only through
+hand-written lock-free SPSC queues, with `io_uring` as each core's I/O
+backend. This is the Seastar model.
+
+It was chosen over kernel bypass, over AF_XDP and over `io_uring` alone
+because it is the only candidate that is both buildable on this hardware and
+forces the two things employers actually name: lock-free queues with explicit
+memory ordering, and a named kernel I/O interface. Section 5 has the
+evidence, including the part where the evidence is weaker than one would
+like.
+
+## The schedule
+
+| Week | Hours | What gets built | What exists at the end |
+|---|---|---|---|
+| **1** | 8 | Single-thread `epoll` server, `GET` and `SET`, `std::unordered_map`. Build scaffolding: `lobster_core` library, GTest wired, the hanging smoke test fixed | a server that answers |
+| **2** | 10 | Open-loop UDP load generator, recording latency from the *intended* send time. About 400 lines | a client that measures honestly |
+| **3** | 8 | `clock_gettime` vs `rdtsc`, TSC invariance confirmed, HdrHistogram wired. A/A noise floor, three runs. `env.sh` with a check mode | the first trustworthy row in NUMBERS.md |
+| **4** | 8 | **Design A.** Multi-thread, one shared table behind striped mutexes, then a spinlock with backoff | the baseline to beat |
+| **5** | 10 | **Design B.** Own hash table — open addressing, 64-byte buckets, SoA. Shard per core with pinned threads and `SO_REUSEPORT`. Key-derived source port | a sharded store |
+| **6** | 10 | Hand-written **SPSC ring mesh** for the keys the port trick cannot place. Padded with `std::hardware_destructive_interference_size`. TSan clean. False sharing measured with the padding present *and* removed | the hardest and most asked-about part |
+| **7** | 8 | **Design C.** One `io_uring` ring per core, single issuer, `DEFER_TASKRUN`, multishot recv. A/B against `epoll`. Then `perf stat` and `perf c2c` across all three designs | the three-way comparison |
+| **8** | 6 | Write up NUMBERS.md and the README as one continuous story | the artifact |
+
+That is 64 hours. Weeks 2, 5 and 6 are deliberately over budget and week 8
+deliberately under, because the load generator and the SPSC queue always
+overrun, and the last week is writing rather than coding.
+
+## Why this order
+
+Five decisions, each of which looks wrong until you have been burned by it:
+
+**The load generator comes second, not sixth.** Without an open-loop
+generator every number after it is a lie by coordinated omission — a
+closed-loop client stops sending while the server is stalled, and therefore
+never records the stall. The measuring instrument has to exist before there
+is anything worth measuring.
+
+**The governor and the noise floor come before any optimisation.** Week 3
+produces no feature at all. It fixes the CPU frequency, disables the deep
+idle states, pins the THP setting, and then measures the same binary against
+itself three times to find out how much two identical runs differ. Skipping
+that week is how a project accumulates thirty rows of noise and a confident
+wrong conclusion.
+
+**Design A comes before Design B.** Covered above: the comparison *is* the
+result.
+
+**The SPSC queue gets a whole week to itself.** It is the single most
+interview-cited topic in this document and the easiest to get subtly wrong —
+a relaxed store where a release store belongs will pass every test on x86 and
+fail on ARM.
+
+**`io_uring` comes last.** A PVLDB 2026 paper measured a drop-in `epoll` →
+`io_uring` swap at only **1.10×** and concluded that treating it as a
+drop-in replacement "is inadequate"; it only pays off in a ring-per-thread,
+single-issuer design. Which is to say: the architecture has to exist first,
+or the result is a shrug.
+
+## What the eight weeks produce
+
+A README with five things on it. These five, and not a feature list, because
+these five are what a conversation can be had about:
+
+1. Throughput against server core count, 1 to 4, for all three designs.
+2. p99 and p99.9 at a fixed offered rate, for all three designs.
+3. `perf stat` counters per design — cache misses, context switches, IPC.
+4. One **`perf c2c`** before and after, showing a false-sharing problem found
+   and removed.
+5. A **TSan-clean** SPSC queue, with tests.
+
+## The honest limits, which go in the README too
+
+Nothing here is hidden, because hiding it is how a project stops being
+believable:
+
+- Everything runs over loopback, client and server sharing six cores. Every
+  number is a relative A/B and never an absolute.
+- The `io_uring` versus `epoll` gap on loopback **may turn out to be small**.
+  That is a finding, not a failure, and the README says so with the PVLDB
+  number next to it.
+- Zero-copy receive and NAPI busy-poll cannot be demonstrated at all. Both
+  need NIC support this machine does not have.
+- One NUMA node, so the NUMA placement code is written correctly and never
+  measured.
+
+## What is cut, and what that costs
+
+| Cut | What is lost |
+|---|---|
+| **M4** slab allocator | variable-length value management. Values are fixed-size for these eight weeks |
+| **M7** zero-copy parse | `std::start_lifetime_as` and the no-allocation parse path |
+| **M5** hugepages | TLB behaviour goes unexamined |
+| **M6** prefetch and batching | overlapping memory trips, `recvmmsg` |
+| **M8** boot-time isolation | `isolcpus` and `nohz_full` need a reboot. The no-reboot half survives in week 3 |
+| **M1** conformance oracle | correctness checked by hand rather than diffed against real `memcached` |
+| **M9, M9b** | the SMT and container studies |
+| **M33** | the full utilisation curve, reduced to finding the knee once in week 3 |
+| **All of v2** | AF_XDP, DPDK, SIMD, TCP, eviction, persistence |
+
+Topic coverage drops from 81 of 85 to **about 26 of 85**. That is the price of
+eight weeks. It is written here so that it is a decision taken in advance
+rather than a disappointment discovered in week 7.
+
+## The 26 topics these eight weeks tick
+
+Named explicitly, so there is no vagueness about what gets a tick when a week
+ends. Full descriptions are in section 7.
+
+**CPU and memory (6)** — cache lines and false sharing, measured with `perf
+c2c` in week 6; cache-aware data layout; memory ordering, barriers and
+`std::atomic`; store buffers and memory disambiguation; data-oriented design,
+AoS versus SoA; frequency scaling, turbo and throttling.
+
+**Concurrency (7)** — lock-free algorithms; SPSC, MPSC and MPMC queues;
+seqlocks, on Design A; spinlocks, backoff and futexes; thread affinity,
+pinning and isolation; shard per core, share nothing; the ABA problem and CAS
+loops, on Design A's free list.
+
+**Kernel and I/O (5)** — syscall cost and the vDSO; `epoll` and event loops;
+`io_uring`; scheduler classes, `isolcpus` and `nohz_full`; C-states and
+P-states, through `/dev/cpu_dma_latency`.
+
+**Networking (2)** — consistent hashing and flow affinity; protocol framing.
+
+**Measurement (6)** — `rdtsc` and `clock_gettime`; latency distributions,
+p99.9 and coordinated omission; HdrHistogram; `perf` and hardware counters;
+microbenchmarking pitfalls; queueing theory and Little's law, from week 3's
+utilisation curve.
+
+## Rules for the eight weeks specifically
+
+- **A week that overruns loses its next item, not its measurement.** Drop
+  scope. Never drop the NUMBERS.md row.
+- **Weeks 2, 3 and 4 are not negotiable.** The load generator, the honest
+  clock, the noise floor, the environment script and Design A are the
+  difference between a project with results and a project with anecdotes. If
+  time runs out, **cut Design C** — two designs compared honestly beats three
+  compared badly.
+- **No new topics.** Anything interesting discovered along the way goes into
+  section 11, not into these eight weeks.
+- **Week 8 is for writing.** A measured project that nobody can read is not
+  finished.
+
+## And afterwards
+
+The next three, in order, about two weeks each: **M4** the slab allocator,
+which is the obvious gap left by fixed-size values; **M7** zero-copy parse;
+then **M18** AF_XDP on a `veth` pair. That is a natural second two-month
+block, and the SPSC work in week 6 is what makes it worth doing.
+
+---
+
+# 5. Why anyone should care
+
+This section exists because "I built a cache" is not a reason and everybody
+knows it. The question is whether the thing being learned is the thing being
+hired for. Here is what was found on 2026-11-12, quoted where the text was
+retrievable, and flagged where it was not.
+
+## What postings actually say
+
+**QRT**, Core Trading Technology, posted 2026-05-08:
+
+> "Familiarity with scalable I/O models (e.g., epoll, io_uring), lock-free
+> structures, and concurrent programming"
+
+That single line covers weeks 1, 6 and 7 of this project.
+
+**Jane Street**, Low-Latency Engineer:
+
+> "Some experience with fast-packet processing in user space and common
+> kernel-bypass implementations would be ideal (such as Solarflare
+> OpenOnload/TCPDirect/ef_vi, Exablaze, InfiniBand verbs, DPDK)"
+
+and, separately:
+
+> "can you describe modern x86 AMD and Intel cache hierarchies?"
+
+The first is impossible on this hardware and is the reason section 8 has
+`BLOCKED` markers in it. The second is answered directly by week 7's `perf
+c2c` output.
+
+**Meta**, Host Networking, preferred qualifications:
+
+> "DPDK, eBPF/XDP, AF_XDP, io_uring"
+
+and
+
+> "kernel bypass, zero-copy I/O, and RDMA/RoCEv2"
+
+**Cloudflare**, Spectrum, posted 2026-07-31:
+
+> "sockets, eBPF, network namespaces, netfilter/nftables, tc"
+
+**HRT**, from an interview guide:
+
+> "what does C++'s `memory_order_acquire` actually guarantee on x86 vs ARM?"
+
+That is week 6, exactly.
+
+And the most interesting data point: **HRT and Optiver name no technology at
+all.** Optiver's entire ask is "2+ years preferred of C++ experience in
+low-latency systems". For firms like those the keyword matters far less than
+being able to reason about performance with real numbers — which is what
+NUMBERS.md is for.
+
+## Supporting evidence
+
+- **PVLDB 2026 on `io_uring`:** a drop-in swap measured **1.10×** over
+  `epoll`, with the conclusion that "Treating io_uring as a drop-in
+  replacement in a traditional I/O-worker design is inadequate." The paper
+  recommends ring-per-thread, single-issuer. That is this architecture, and
+  it is why Design C comes last.
+- **ScyllaDB** merged an asymmetric `io_uring` Seastar backend on 2026-07-22.
+  Live work, not a settled topic.
+- **DPDK is not declining.** DPDK Summit Stockholm ran 2026-05 on DPDK 26.03.
+  It is simply unavailable on this machine.
+
+## Where the evidence is weak
+
+**No posting found names "shard-per-core" or "Seastar" as a requirement.**
+The choice rests on three things: what postings do name, what is buildable on
+this hardware, and the PVLDB finding that `io_uring` only pays off inside
+this architecture. It is a judgement. It is not a measured ranking, and this
+document does not pretend otherwise.
+
+Not verified: ScyllaDB and ClickHouse posting text, because those pages were
+closed or partial; Citadel, IMC and Jump postings, not retrieved at all;
+Katran's current production status; Google's `io_uring` stance after 2023.
+The Jane Street and HRT quotes come from Built In copies rather than the
+official pages, and the interview material is from prep sites rather than
+verified candidate reports.
+
+## Five questions to expect, and where each is answered
+
+1. *In your SPSC queue, which memory order is on each load and store, and
+   what breaks on ARM if the release store is relaxed?* — week 6
+2. *A `GET` lands on core 2 for a key owned by core 5. Walk the path. What
+   does the hop cost at p99, and how do real systems avoid it?* — weeks 5
+   and 6
+3. *Why `DEFER_TASKRUN` with a single issuer? When is `SQPOLL` wrong on a
+   six-core box?* — week 7
+4. *Your `io_uring` versus `epoll` delta on loopback was X. Why? What changes
+   with a real NIC?* — week 7, and the honest-limits paragraph
+5. *Describe the Zen 2 cache hierarchy, and show which counters moved when
+   you fixed the layout.* — week 7's `perf c2c` before and after
+
+---
+
+# 6. The rules
+
+Ten of them. They exist because every one of them is a mistake that is easy
+to make and expensive to discover late.
+
+**Nothing lands without a number.** A performance claim carries the command
+that produced it and the date it was measured. A claim without a command is a
+guess and gets labelled as one.
+
+**p99.9, never averages.** Record p50, p99, p99.9 and max. An average hides
+exactly the event worth fixing. The max is always something stupid; find out
+what it was.
+
+**Measure before removing.** A milestone that deletes a layer must first
+record what that layer cost. Otherwise "I removed the kernel and it got
+faster" is a story, not a result.
+
+**Open-loop load only.** A closed-loop benchmark stops sending while the
+server is stalled, so it never records the stall. This is coordinated
+omission and it is the single most common way a latency number turns out to
+be fiction.
+
+**Noise floor before any claim.** An A/A run — the same binary measured
+against itself — comes before the first optimisation and is repeated whenever
+the machine changes. A difference smaller than the noise floor is not a
+result.
+
+**Three runs minimum.** One run is an anecdote. Record the spread.
+
+**No allocation on the hot path.** Everything pre-allocated at startup.
+
+**No fallback paths.** When an operation fails, let the error propagate. A
+silent default hides the bug and makes the incident harder to diagnose later.
+
+**An external oracle decides correctness, not latency.** Real `memcached` and
+a real memcached client library are the reference for protocol behaviour, so
+a bug cannot be shipped as a feature. They are *not* the latency scoreboard:
+`memtier_benchmark` has no UDP request transport, which is why the load
+generator is written by hand in week 2.
+
+**A regression is a result you keep.** When a milestone makes things slower,
+put the code behind a compile-time flag, record the row with the regression
+in it, and write down why. Never silently revert, and never delete the row.
+
+**When a milestone is blocked by hardware, record it and move on.** Mark it
+`BLOCKED`, write down what would unblock it, and go to the next one. A
+blocked milestone never stops the project.
+
+**One milestone at a time.** Finish it, measure it, record the row, move.
+
+## The eight parts of the system
+
+Every topic in section 7 belongs to one of these. It is worth holding the
+picture in your head while reading them.
+
+```
+  ┌─ RX ───────┐ ┌─ PARSE ──┐ ┌─ STORE ────────┐ ┌─ TX ───────┐
+  │ epoll /    │ │ memcache │ │ hash table +   │ │ batched    │
+  │ io_uring   │→│ text     │→│ slab allocator │→│ replies    │
+  └────────────┘ └──────────┘ └────────────────┘ └────────────┘
+         ▲              ▲              ▲                ▲
+         └──── SHARD MODEL: one core owns one slice ─────┘
+                              │
+                HARNESS: histogram, perf, load generator
+                              │
+                BUILD: flags, LTO, PGO, disassembly
+```
+
+---
+
+# 7. The topics
+
+Eighty-five of them. This is the reason the project exists, so it is worth
+saying what the list is and what it is not.
+
+It is **not** a syllabus to work through. It is a map of the territory, where
+every entry names the place in *this* project where that idea does real work.
+A topic with no home in the code is a topic you will read about and forget.
+
+Three conventions, used throughout:
+
+- **A box gets ticked when the idea has been implemented and measured here**
+  — not when it has been read about, and not when it has been understood.
+- *Deferred* means it needs hardware that does not exist or an architecture
+  that contradicts this one. Four entries carry it, each with the reason.
+- Where a topic is **written but unmeasurable on this machine** it says so in
+  place. Three entries are like that, and pretending otherwise would make the
+  whole list untrustworthy.
+
+Twenty-six of these are ticked by the eight weeks in section 4. The rest
+belong to the roadmap in section 8, and each one names its milestone.
 
 ## CPU and memory
 
@@ -663,19 +834,32 @@ DDIO (Intel Xeon only), and NIC hardware timestamping (WiFi only).
 
 ---
 
-# Milestones
+---
+
+# 8. The long game
+
+Thirty-five milestones, M0 to M34, spanning 13 to 19 months at eight hours a
+week. **None of this is committed.** Section 4 is what is committed.
+
+So why is it here? Because the reasoning in it is correct and expensive to
+reproduce. Each milestone records what to build, what "done" means, and — for
+the blocked ones — exactly what piece of hardware would unblock it. When the
+eight weeks finish and the question becomes "what next", this is the answer,
+already thought through.
+
+Read it as a price list and a map, not a commitment.
+
+Two conventions:
+
+- **Numbers are stable.** A milestone keeps its number for the life of the
+  project, even while blocked, so NUMBERS.md rows never need renumbering.
+  Letters — M1a, M2b, M13a — were inserted by the review of 2026-11-12 rather
+  than renumbering everything after them.
+- **No marker means ready.** `BLOCKED` means the hardware does not exist, and
+  the row says what would change that.
+
 
 Each milestone finishes with a NUMBERS.md row and the topics it ticked.
-
-Numbers are stable: a milestone keeps its number for the life of the project,
-even when it is blocked, so NUMBERS.md rows and notes never need renumbering.
-Letters (M1a, M2b) were inserted by the review of 2026-11-12 rather than
-renumbering everything after them.
-
-Status markers: no marker means ready. **BLOCKED** means the hardware does
-not exist, and the row says what would unblock it.
-
----
 
 ## v1 — the finishable project
 
@@ -791,7 +975,19 @@ Nothing below is cut. Each item is real and each one is optional.
 
 ---
 
-# Time
+---
+
+# 9. What it costs
+
+Two questions anyone starting this should ask and almost nobody does: how long
+does it take, and how much code is it?
+
+The answers below are estimates and are labelled as such. The one that
+matters is the first line of the first table — 64 hours — because that is the
+one that was committed to. Everything else is there so the size of what was
+*not* committed to is visible rather than vague.
+
+## Time, if the whole roadmap were built
 
 **Assumption: 8 hours a week**, evenings and weekends, as one person with
 C++ experience but no prior networking systems work. Scale everything below
@@ -823,13 +1019,13 @@ Two honest notes on these numbers:
   allocator. Real work, and end-to-end p99.9 will not move. M2c exists so
   that it moves *something*.
 
-# Size
+## Code size
 
 Code lines only, no comments or blanks, `tokei` style. Every figure is an
 **estimate**, anchored where possible on the memcached counts measured
 2026-11-12 at `2d51e36`.
 
-## Two-month plan
+### Size of the eight weeks
 
 | Component | Week | Estimate |
 |---|---|---|
@@ -853,7 +1049,7 @@ thread models share one store, so much of Design B and C is substitution
 rather than new code — but the SPSC queue and the `io_uring` path are the
 two densest things in the project, and both are in here.
 
-## v1
+### Size of v1
 
 | Component | Milestone | Estimate | Anchor |
 |---|---|---|---|
@@ -875,7 +1071,7 @@ two densest things in the project, and both are in here.
 | CMake, presets, justfile, `env.sh` | M2b | 400 | — |
 | **v1 total** | | **6,500** | |
 
-## v2
+### Size of v2
 
 | Component | Milestone | Estimate |
 |---|---|---|
@@ -900,7 +1096,7 @@ two densest things in the project, and both are in here.
 | **v2 total** | | **10,100** |
 | **Everything buildable** | | **16,600** |
 
-## What the numbers say
+### What the size numbers say
 
 ```
 memcached core, measured:       13,047 code lines (12 .c files)
@@ -948,7 +1144,7 @@ there, starting with M12.
 A v2 milestone is started because it is wanted, not because the project is
 unfinished without it.
 
-## Honest limits
+## Honest limits of the whole roadmap
 
 A laptop, a shared kernel and a WiFi-only machine will not reach the numbers
 a tuned server reaches, and loopback is not a network. That is accepted, and
@@ -958,6 +1154,18 @@ than an absolute number.
 "I took the in-process `GET` from 1100 ns to 90 ns, here is the `perf`
 counter behind each step, and here is the one case where it got worse and
 why" is a better result than a small number nobody can account for.
+
+---
+
+# 10. How it is built
+
+The unglamorous half. Tests, dependencies, the build, the folder layout, and
+the one command that runs a benchmark reproducibly.
+
+This section is longer than it feels like it should be, and that is the
+lesson. A project like this fails far more often on "I forgot to pin the
+governor and now these twelve rows are incomparable" than on anything
+algorithmic. The scaffolding *is* the experiment apparatus.
 
 ## Testing
 
@@ -1008,7 +1216,6 @@ none of this exists.
   `pkg-config`, off by default. **DPDK is never a submodule.**
 - Line 22 of the current file says tests are opt-in while defaulting to `ON`.
   Pick one.
-
 ## Dependencies
 
 The language is **C++**, pinned. Standard is **C++23**: everything
@@ -1172,7 +1379,17 @@ Directories are created when the first file needs them. No empty folders with
 Skip tutorials on `select()`. Read `redis/redis` `ae_epoll.c` instead; it is
 shorter than most blog posts about it.
 
-## Open questions
+---
+
+# 11. Open questions
+
+Decisions deliberately not made yet, because the information needed to make
+them does not exist. They live here rather than in the body so that reading
+the plan does not feel like reading an argument with itself.
+
+Anything interesting discovered during the eight weeks gets added here, and
+nowhere else.
+
 
 - Does M11's "client derives its port from the key" distort the benchmark by
   making the client do work a real client would not? Probably yes. Record it.
