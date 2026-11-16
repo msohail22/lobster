@@ -2,7 +2,7 @@
 
 *A plan, and the reasoning behind it.*
 
-Last updated 2026-11-12.
+Last updated 2026-11-16.
 
 ---
 
@@ -15,7 +15,7 @@ Last updated 2026-11-12.
 5. [Why anyone should care — the hiring evidence](#5-why-anyone-should-care)
 6. [The rules](#6-the-rules)
 7. [The topics](#7-the-topics)
-8. [The long game — milestones M0 to M34](#8-the-long-game)
+8. [The long game — milestones M0 to M16](#8-the-long-game)
 9. [What it costs — time and code](#9-what-it-costs)
 10. [How it is built — dependencies, layout, scaffolding](#10-how-it-is-built)
 11. [Open questions](#11-open-questions)
@@ -173,7 +173,7 @@ no virtual calls, no exceptions, no standard containers. The comfortable C++
 tests and the load generator, and never crosses into a `GET`.
 
 Expect C-shaped code inside `.cpp` files from week 7 onward, wrapped thinly
-and not prettified, because `liburing`, `libbpf` and AF_XDP are all C APIs.
+and not prettified, because `liburing` is a C API.
 
 ---
 
@@ -181,13 +181,9 @@ and not prettified, because `liburing`, `libbpf` and AF_XDP are all C APIs.
 
 **64 hours. Eight weeks, eight hours a week.** Set 2026-11-12.
 
-This is the part that is actually committed. Section 8 contains a roadmap of
-35 milestones that would take 13 to 19 months; it is kept because the
-reasoning in it is correct, not because any of it happens inside these 64
-hours.
-
-Full v1 of that roadmap — milestones M0 to M13b — is 24 to 35 weeks. It does
-not fit. What follows was chosen for **learning per hour**, not for
+This is the part that is actually committed. Section 8 contains the full v1
+roadmap of 24 milestones, M0 to M13b plus M16. It is 26 to 38 weeks, so it
+does not fit in these 64 hours. What follows was chosen for **learning per hour**, not for
 completeness.
 
 ## The one concept being demonstrated
@@ -291,16 +287,18 @@ believable:
 | **M1** conformance oracle | correctness checked by hand rather than diffed against real `memcached` |
 | **M9, M9b** | the SMT and container studies |
 | **M33** | the full utilisation curve, reduced to finding the knee once in week 3 |
-| **All of v2** | AF_XDP, DPDK, SIMD, TCP, eviction, persistence |
 
-Topic coverage drops from 81 of 85 to **about 26 of 85**. That is the price of
+v2 — AF_XDP, DPDK, SIMD, TCP, eviction, persistence — is not cut from these
+eight weeks; it was removed from the project entirely on 2026-11-16.
+
+The eight weeks tick **about 26 topics**. That is the price of
 eight weeks. It is written here so that it is a decision taken in advance
 rather than a disappointment discovered in week 7.
 
 ## The 26 topics these eight weeks tick
 
 Named explicitly, so there is no vagueness about what gets a tick when a week
-ends. Full descriptions are in section 7.
+ends. The full list is linked from section 7.
 
 **CPU and memory (6)** — cache lines and false sharing, measured with `perf
 c2c` in week 6; cache-aware data layout; memory ordering, barriers and
@@ -341,8 +339,8 @@ utilisation curve.
 
 The next three, in order, about two weeks each: **M4** the slab allocator,
 which is the obvious gap left by fixed-size values; **M7** zero-copy parse;
-then **M18** AF_XDP on a `veth` pair. That is a natural second two-month
-block, and the SPSC work in week 6 is what makes it worth doing.
+then **M5** huge pages. That is a natural second two-month block toward
+finishing v1.
 
 ---
 
@@ -495,7 +493,7 @@ blocked milestone never stops the project.
 
 ## The eight parts of the system
 
-Every topic in section 7 belongs to one of these. It is worth holding the
+Every lobster topic belongs to one of these. It is worth holding the
 picture in your head while reading them.
 
 ```
@@ -515,331 +513,17 @@ picture in your head while reading them.
 
 # 7. The topics
 
-Eighty-five of them. This is the reason the project exists, so it is worth
-saying what the list is and what it is not.
-
-It is **not** a syllabus to work through. It is a map of the territory, where
-every entry names the place in *this* project where that idea does real work.
-A topic with no home in the code is a topic you will read about and forget.
-
-Three conventions, used throughout:
-
-- **A box gets ticked when the idea has been implemented and measured here**
-  — not when it has been read about, and not when it has been understood.
-- *Deferred* means it needs hardware that does not exist or an architecture
-  that contradicts this one. Four entries carry it, each with the reason.
-- Where a topic is **written but unmeasurable on this machine** it says so in
-  place. Three entries are like that, and pretending otherwise would make the
-  whole list untrustworthy.
-
-Twenty-six of these are ticked by the eight weeks in section 4. The rest
-belong to the roadmap in section 8, and each one names its milestone.
-
-## CPU and memory
-
-- [ ] **Cache hierarchy, cache lines, false sharing** — hash bucket sized to
-      exactly 64 bytes; per-core counters padded apart
-- [ ] **Cache-aware data layout** — open addressing over chaining, so probing
-      stays inside one cache line
-- [ ] **NUMA, node affinity, local vs remote memory** — a shard's table and
-      slab allocated on the node its core sits on. **Unmeasurable on this
-      machine: 1 NUMA node.** The code is written correctly with `libnuma` and
-      `hwloc`, and the cost is read about, not observed. Milestone M5
-- [ ] **TLB, huge pages, page faults** — 10M entries on 4 KB pages thrashes
-      the TLB; 2 MB pages fix it. DPDK requires them anyway
-- [ ] **Prefetching, hardware and software** — `__builtin_prefetch` the
-      bucket while still parsing the key, to overlap the memory trip
-- [ ] **Memory ordering, barriers, `std::atomic`** — the SPSC queue and the
-      seqlock on hot reads
-- [ ] **Store buffers, memory disambiguation** — why the seqlock needs a
-      release fence and not just `volatile`
-- [ ] **Branch prediction, branchless code** — the probe loop and the
-      key-length compare
-- [ ] **ILP, pipelining, superscalar execution** — processing 4 packets at
-      once so independent hashes overlap
-- [ ] **Out-of-order execution, dependency chains** — hash to bucket to
-      compare is a serial chain; batching breaks it
-- [ ] **Micro-op cache, loop alignment, code layout** — the probe loop,
-      measured with `perf` and `llvm-mca`
-- [ ] **Hyper-threading and SMT contention** — is the sibling thread helping
-      or stealing? Measure, then decide to disable
-- [ ] **Frequency scaling, turbo, throttling** — why the first p99.9 reading
-      was nonsense until the governor was pinned. On this AMD part there is no
-      AVX offset, and battery versus AC will dominate run-to-run variance.
-      Milestone M2b
-- [ ] **C-states, P-states, `cpuidle`** — a core that went to sleep takes
-      microseconds to wake. One of the top causes of a bad p99.9, and separate
-      from frequency scaling. **This machine uses `acpi_idle`, not
-      `intel_idle`**, so the knob is the per-state `disable` file in sysfs or
-      `/dev/cpu_dma_latency`, and no reboot is needed. Milestone M2b
-- [ ] **Non-temporal stores, write combining, `memcpy` strategy** — a large
-      `SET` copy must not evict the hash table from L3. `movnt` exists for
-      exactly this, and the effect is visible in `cqm_occup_llc`, which this
-      CPU has. Needs TCP for large values, so it follows M23a. Milestone M25
-- [ ] **Memory bandwidth, RDT, cache allocation (CAT)** — shards contend for
-      L3 and for one memory controller, so cache partitioning stops one noisy
-      shard evicting the others. **On this machine L3 is 2 x 4 MB, not one
-      shared block**, so which cores share which half must be read from
-      `lstopo` first. Needs shards to exist. Milestone M10
-- [ ] **4 KB aliasing, store-to-load forwarding stalls** — the
-      microarchitectural trap where two unrelated buffers collide, because the
-      CPU compares only the low 12 bits of an address. Shows up once packet
-      buffers are a ring, so it belongs with the ring, not with the first
-      zero-copy parse. Milestone M16
-- [ ] **Fragmentation and slab calcification** — memcached's famous failure
-      mode: a slab class keeps memory for a size no longer used. Milestone M32
-- [ ] **Allocators: slab, arena, pool, jemalloc, tcmalloc** — values are
-      variable length, so a slab allocator is written, like memcached's
-- [ ] **Data-oriented design, AoS vs SoA** — keys, hashes and values in
-      separate arrays, so a probe reads only hashes
-- [ ] **Cache-oblivious layout** — *deferred.* Needs a tree, not a hash table
-
-## SIMD
-
-- [ ] **SSE, AVX2, AVX-512, NEON** — key comparison and protocol scanning
-- [ ] **Auto-vectorisation, and why it fails** — watch the compiler fail on
-      the parse loop, then do it by hand
-- [ ] **Intrinsics and inline assembly** — `_mm256_cmpeq_epi8` compares a
-      32-byte key in one instruction
-- [ ] **Masking and predication** — comparing keys shorter than the vector
-      width
-- [ ] **Shuffles, permutes, horizontal operations** — finding the first
-      `\r\n` in a command
-- [ ] **Alignment, load and store penalties** — packet buffers are not
-      32-byte aligned; measure the unaligned load cost
-- [ ] **SWAR, bit tricks, popcount, `pdep` and `pext`** — 8 bucket tags
-      compared in one 64-bit word, `tzcnt` to find the match
-- [ ] **SIMD parsing, simdjson style** — the whole parser, once the scalar
-      version has a baseline number
-- [ ] **Gather and scatter, SVE** — *deferred.* Wrong access pattern, and no
-      hardware
-
-## Concurrency
-
-- [ ] **Lock-free and wait-free algorithms** — the handoff queues. The table
-      needs no locks because one core owns it
-- [ ] **SPSC, MPSC and MPMC queues** — SPSC for cross-core key forwarding,
-      written by hand. MPSC and MPMC are built only as the losing comparison,
-      to show what the extra generality costs. Milestone M12
-- [ ] **Hazard pointers, RCU, epoch-based reclamation** — **this does not
-      arise in a share-nothing table**, because one core owns its slice and
-      there is no concurrent reader. It arises only in the deliberately shared
-      baseline built in M13a, which exists so the share-nothing claim can be
-      measured against something. Milestone M13a, then M24
-- [ ] **The ABA problem, CAS loops** — the slab free list is per-shard and
-      therefore needs no CAS at all. The ABA problem appears in the shared
-      baseline of M13a, where the free list is contended on purpose.
-      Milestone M13a
-- [ ] **Seqlocks and read-mostly structures** — a reader retries instead of
-      locking. Only meaningful where a reader and a writer actually share
-      memory, which share-nothing removes, so it is measured on the M13a
-      shared baseline. Milestone M13b
-- [ ] **Spinlocks, backoff, futexes** — the shared-table baseline of M13a is
-      locked first with `std::mutex`, then a spinlock with backoff, so the
-      cost of each is on record before share-nothing removes both.
-      Milestone M13a
-- [ ] **Thread affinity, pinning, isolation** — the foundation of the shard
-      model, with `isolcpus` and `nohz_full`
-- [ ] **Shard per core, share nothing** — the central architectural decision
-- [ ] **Work stealing** — scoped to large value copies only. A large `SET`
-      copy is pure CPU with no shared state, so it can be stolen safely. It
-      must never touch the hash table, because that would reintroduce the
-      locks share-nothing removed. The milestone exists to prove that point
-      by measurement
-- [ ] **Coroutines** — the cross-core forwarding path. Core 3 sends a key to
-      core 5 and waits for the reply; as a hand-written state machine that is
-      miserable, and as a C++20 coroutine it reads like straight-line code.
-      Then measure the frame allocation cost, which is the real lesson
-- [ ] **Fibers** — the same forwarding path, implemented a second way, for
-      comparison. A fiber is a thread the kernel does not know about: its own
-      real stack, switched by swapping registers and the stack pointer, about
-      20 ns against 1 to 3 us for a thread switch. Unlike a stackless C++20
-      coroutine it can yield from deep inside nested calls, which is why it
-      drops into existing blocking code without a rewrite. There is no
-      reference implementation to copy: checked 2026-11-12, every coroutine
-      hit in the memcached repository is Lua inside the proxy, not C fibers
-      (`rg -ln 'ucontext|swapcontext|makecontext|co_await|coroutine'`).
-      `boost::context` and `rigtorp/awesome-lockfree` are the starting
-      points
-
-## Kernel and I/O
-
-- [ ] **Syscall cost, vDSO** — measured first: what does one `recvfrom`
-      actually cost, and what does `clock_gettime` cost when it is a vDSO call
-      rather than a real syscall? Milestone M2
-- [ ] **`epoll`, event loops** — M0 is one blocking `recvfrom`. M0b adds
-      `epoll` plus `recvmmsg`, which is also what makes batching possible at
-      all. Milestone M0b
-- [ ] **`io_uring`** — the middle rung: batched receive and send without
-      leaving the kernel
-- [ ] **`AF_XDP`, XDP, eBPF** — `CONFIG_XDP_SOCKETS=y` is confirmed, but
-      `iwlwifi` has no native XDP, so on the real NIC this is generic
-      copy-mode only. A `veth` pair in a network namespace supports native
-      XDP and is the way this gets built. Expect it to be *slower* than
-      `io_uring` on loopback: the lesson is the API and the frame-level view,
-      not a win. Milestones M18, M19
-- [ ] **DPDK, poll-mode drivers, hugepage mempools** — **BLOCKED.** No
-      poll-mode driver exists for `iwlwifi`, and unbinding the only NIC
-      removes the network. Runnable only against virtual devices (`memif`,
-      `TAP`, `net_af_xdp`), and then the load generator must also be DPDK or
-      the kernel is back in the path. Milestone M20
-- [ ] **RDMA, RoCE, InfiniBand** — *deferred.* No hardware
-- [ ] **Zero-copy: `splice`, `MSG_ZEROCOPY`** — the send path, before bypass
-      removes copies entirely. `MSG_ZEROCOPY` only pays off above roughly
-      10 KB, so it is measured with large `SET` values and expected to lose on
-      small ones. Milestone M16
-- [ ] **`mmap`, direct I/O, the page cache** — `mmap` with `MAP_POPULATE`
-      backs the slab arena, so fault cost is paid at startup, not at p99.9.
-      Direct I/O arrives with persistence at M27: it is an operating system
-      feature, not a language one — `open(path, O_RDWR | O_DIRECT)` plus
-      `posix_memalign`, identical from C or C++, and unreachable through
-      `std::fstream`. It is not automatically the right answer: memcached
-      keeps the page cache and moves the blocking write to its own thread
-      instead, so M27 measures both
-- [ ] **Interrupts, softirq, NAPI, interrupt coalescing** — what is being
-      escaped. **Not observable on loopback, which has no NAPI**, so this is
-      measured on the `veth` pair of M18 with `bpftrace` on the softirq
-      tracepoints. Milestone M18
-- [ ] **Flow steering: RSS, RPS, RFS, IRQ affinity** — **RSS hashes the
-      IP and port 4-tuple, never the key**, so a NIC can never agree with a
-      key-based shard map by itself. Two things actually work: the client
-      derives its source port from the key, or an eBPF program reads the key
-      and redirects. `iwlwifi` has a single queue, so hardware RSS is blocked
-      here; `SO_REUSEPORT` and eBPF steering are not. Milestones M11, M19
-- [ ] **Scheduler classes, `SCHED_FIFO`, `isolcpus`, `nohz_full`** — stopping
-      the kernel taking a core in the middle of a `GET`
-- [ ] **cgroups, and what containers do to latency** — run the same binary in
-      Docker, watch p99.9 degrade, explain why
-- [ ] **CPU topology discovery, `hwloc`, `lstopo`** — you cannot pin to the
-      right core or NUMA node without first reading the machine's real layout.
-      Milestone M8
-- [ ] **PCIe, DMA, DDIO** — how a packet physically reaches the CPU. Needed
-      to understand why bypass is fast, not just that it is. **DDIO is Intel
-      Xeon only**, so on this machine it is read, not measured. Milestone M20
-- [ ] **Speculative-execution mitigation cost** — Spectre and Meltdown
-      mitigations tax every syscall, so they hit the pre-bypass path hardest.
-      `mitigations=off` on the kernel command line is a cheap, informative
-      experiment and belongs with the other boot-time knobs. Milestone M8
-
-## Networking
-
-- [ ] **Consistent hashing, flow affinity** — key to shard, and flow to the
-      core owning that shard
-- [ ] **MTU, jumbo frames, TSO, GRO, LRO** — large `SET` values. GRO batches
-      packets and therefore adds latency to the first one, which is why low
-      latency turns it off. **Not measurable on loopback**; measured on the
-      `veth` pair with `ethtool -K`. Milestone M18
-- [ ] **NIC hardware timestamping, PTP, clock sync** — the only honest clock
-      for one-way latency between two machines
-- [ ] **Protocol framing, varints** — text protocol first, then binary
-- [ ] **Serialisation: FlatBuffers, Cap'n Proto, SBE** — the binary protocol
-      variant; measure parse cost against text
-- [ ] **Backpressure and flow control** — what happens when clients send
-      faster than the server drains: drop, or stall everyone
-- [ ] **Head-of-line blocking** — one slow large `SET` behind a thousand
-      small `GET`s on the same queue. Needs TCP for values over 64 KB, so it
-      follows M23a. Milestone M26
-- [ ] **Tail at scale, hedged requests, tail tolerance** — Dean and Barroso.
-      A multi-key request touching every shard inherits the worst shard's p99.
-      A direct consequence of shard per core, and the reason `multiget` is the
-      one feature worth adding beyond `GET` and `SET`. Milestone M34
-- [ ] **Admission control, graceful degradation** — shed load deliberately, or
-      collapse accidentally. Milestone M26
-- [ ] **TCP congestion control, Nagle, delayed ACK** — UDP is the whole of
-      Phase 0 to 3, because connection state would hide the machine. TCP is
-      added at M23a, which is also what makes values larger than a 64 KB
-      datagram possible, and therefore a prerequisite for M25 and M26.
-      Milestone M23a
-- [ ] **UDP multicast, IGMP, QUIC, bufferbloat** — *deferred.* This is
-      unicast request and response
-
-## Measurement
-
-- [ ] **`rdtsc`, `clock_gettime`, clock sources, invariant TSC** — the
-      timestamp on every request. Validate the TSC before trusting it
-- [ ] **Latency distributions, p99.9, coordinated omission** — the load
-      generator sends on a schedule and records latency from the *intended*
-      send time, not the actual one. A closed-loop generator stops sending
-      when the server stalls and so never records the stall. Milestone M1a
-- [ ] **HdrHistogram** — the recording structure behind NUMBERS.md
-- [ ] **`perf` and hardware performance counters** — cache misses, branch
-      misses, IPC on the probe loop
-- [ ] **Top-down microarchitecture analysis** — is the `GET` path front-end
-      bound, memory bound, or retiring? The answer picks the next milestone.
-      `perf stat --topdown` is Intel-only; on Zen 2 the equivalent is built
-      from the AMD PMC events (`ex_ret_ops`, `de_no_dispatch_per_slot`), so
-      the first task is to find out what this CPU actually exposes.
-      Milestone M6b
-- [ ] **Flame graphs, off-CPU analysis** — finding the 900 us outlier. Needs
-      `-fno-omit-frame-pointer` in the build. Milestone M6b
-- [ ] **`bpftrace`, `bcc`, tracepoints** — watching softirq and scheduler
-      events steal a core. This is how the max-latency outlier gets a name
-      instead of a shrug. Milestone M6b
-- [ ] **`llvm-mca`, static throughput analysis** — the probe loop and the
-      SIMD compare, with `-mcpu=znver2`. Milestone M21
-- [ ] **Microbenchmarking pitfalls** — why the first "2 ns `GET`" was the
-      optimiser deleting the call. The in-process harness is built here, and
-      it is what makes Phase 1 measurable at all. Milestone M2c
-- [ ] **Queueing theory, Little's law, utilisation vs latency** — the law
-      behind every row in NUMBERS.md: past roughly 70% utilisation, latency
-      goes vertical. Without it you optimise code when the real answer is "too
-      busy". Milestone M33
-- [ ] **Percentile estimation, t-digest vs HdrHistogram** — how the tool
-      stores a p99.9, and where it is lying. Milestone M2
-
-## Compiler and codegen
-
-- [ ] **Inlining, LTO, PGO, BOLT** — PGO on the real `GET` path. Measure it,
-      because it often does nothing
-- [ ] **`restrict`, aliasing, optimisation driven by undefined behaviour** —
-      why the compiler reloads a bucket pointer that looked cached
-- [ ] **`likely` and `unlikely`, hot and cold splitting** — the probe hit is
-      hot, the resize is cold
-- [ ] **Calling conventions, ABI, register pressure, spills** — the hash
-      function's register pressure, verified in the disassembly
-- [ ] **Reading disassembly** — every optimisation step ends by reading the
-      generated code
-
-## Cache policy and data structures
-
-- [ ] **Timer wheels, hierarchical timing wheels** — `SET` with a TTL needs
-      expiry. A heap is O(log n); a timing wheel is O(1). Milestone M30
-- [ ] **Eviction policies: LRU, segmented LRU, CLOCK, LFU, TinyLFU** — the
-      policy decides the hit rate, and the hit rate decides the latency anyone
-      actually sees. memcached's segmented LRU plus `crawler.c` is the
-      reference. Milestone M31
-
-## Coverage
-
-| Area | Covered |
-|---|---|
-| CPU and memory | 20 / 21 |
-| SIMD | 8 / 9 |
-| Concurrency | 11 / 11 |
-| Kernel and I/O | 14 / 15 |
-| Networking | 10 / 11 |
-| Measurement | 11 / 11 |
-| Compiler and codegen | 5 / 5 |
-| Cache policy and data structures | 2 / 2 |
-| **Total** | **81 / 85** |
-
-Four topic rows are marked deferred, each because it needs hardware that is
-not available or an architecture that contradicts this one: cache-oblivious
-layout, gather and scatter plus SVE, RDMA, and the multicast and QUIC group.
-They are separate projects, not gaps to patch.
-
-Three further topics are written and reasoned about but **cannot be measured
-on this machine**, and say so in place: NUMA remote-memory cost (1 node),
-DDIO (Intel Xeon only), and NIC hardware timestamping (WiFi only).
-
----
+The topic list lives in one place:
+[`index_cpp.md` in cp-setup](https://github.com/msohail22/cp-setup/blob/main/problem%20list/index_cpp.md).
+The lobster topics are numbers 641 to 727 there. They moved on 2026-11-16, so
+that there is one list and not two.
 
 ---
 
 # 8. The long game
 
-Thirty-five milestones, M0 to M34, spanning 13 to 19 months at eight hours a
-week. **None of this is committed.** Section 4 is what is committed.
+Twenty-four milestones, M0 to M16, spanning roughly 6 to 9 months at eight
+hours a week. **None of this is committed.** Section 4 is what is committed.
 
 So why is it here? Because the reasoning in it is correct and expensive to
 reproduce. Each milestone records what to build, what "done" means, and — for
@@ -853,6 +537,8 @@ Two conventions:
 
 - **Numbers are stable.** A milestone keeps its number for the life of the
   project, even while blocked, so NUMBERS.md rows never need renumbering.
+  That is why the list jumps from M13b to M16: M14, M15 and M17 to M34 were
+  v2 milestones and were removed, and their numbers are not reused.
   Letters — M1a, M2b, M13a — were inserted by the review of 2026-11-12 rather
   than renumbering everything after them.
 - **No marker means ready.** `BLOCKED` means the hardware does not exist, and
@@ -863,10 +549,9 @@ Each milestone finishes with a NUMBERS.md row and the topics it ticked.
 
 ## v1 — the finishable project
 
-M0 to M13b. At the end of v1 there is a working, correct, measured
+M0 to M13b, plus M16. At the end of v1 there is a working, correct, measured
 shard-per-core key-value store, with a NUMBERS.md history explaining every
-number. **This is a complete project and a defensible one.** Everything after
-it is extension, not completion.
+number. **This is a complete project and a defensible one.**
 
 ### Phase 0 — a baseline, and a way to see it
 
@@ -886,7 +571,7 @@ it is extension, not completion.
 M1 to M7 before fixing the governor, while also admitting the first p99.9
 reading was nonsense until the governor was pinned. M33 is cheap, needs no
 new code, and tells you whether any later milestone is worth doing: if the
-machine already sits past the knee, no amount of SIMD will help.
+machine already sits past the knee, no amount of code tuning will help.
 
 ### Phase 1 — the data structure
 
@@ -929,51 +614,19 @@ spinlock of M10", but M10 has no locks, so there was nothing to protect and
 nothing to compare. Building the shared version on purpose fixes that and
 turns the architecture from an assumption into a measurement.
 
-**v1 ends here.**
-
----
-
-## v2 — extension
-
-Nothing below is cut. Each item is real and each one is optional.
-
-### Phase 4 — leaving the kernel
+### Phase 4 — `io_uring`
 
 | # | Milestone | Done when |
 |---|---|---|
-| M16 | `io_uring` | batched receive and send. `MSG_ZEROCOPY` measured on large values, where it is expected to win, and on small ones, where it is expected to lose. 4 KB aliasing in the buffer ring checked here |
-| M17 | Busy-poll | application-level spinning. **`SO_BUSY_POLL` does nothing on loopback, which has no NAPI**, so the socket option is only meaningful from M18 onward. CPU cost recorded against the latency win |
-| M18 | `AF_XDP` on a `veth` pair | native XDP in a network namespace, because `iwlwifi` has none. Includes the userspace Ethernet, ARP, IP and UDP layer that raw frames require — the review noted no milestone previously built it. GRO, TSO and softirq behaviour become measurable here. **Expect it to be slower than M16 on this hardware; the result is the frame-level view, not a win** |
-| M19 | eBPF flow steering | an XDP program reads the key and redirects to the owning core. This is the only key-aware steering that is possible at all |
-| M20 | DPDK | **BLOCKED.** No poll-mode driver for `iwlwifi`, and unbinding the only NIC removes the network. Unblocked by: a second machine with a wired Intel NIC, or accepted as a virtual-device exercise (`memif`, `net_af_xdp`) with a DPDK load generator on the other end |
+| M16 | `io_uring`, one ring per core | Design C. One ring per shard, single issuer, `DEFER_TASKRUN`, multishot receive, batched send. A/B against `epoll`. `MSG_ZEROCOPY` measured on large values, where it is expected to win, and on small ones, where it is expected to lose. 4 KB aliasing in the buffer ring checked here |
 
-### Phase 5 — the long tail
+**M16 was moved into v1 on 2026-11-16**, when v2 was removed. Design C needs
+it, so v1 is not complete without it.
 
-| # | Milestone | Done when |
-|---|---|---|
-| M21 | SIMD parser | AVX2 key compare and `\r\n` scan with `<immintrin.h>` intrinsics. **`std::simd` is absent from this libstdc++, verified, and this CPU has no AVX-512.** Compared against the scalar parser and against `llvm-mca -mcpu=znver2` |
-| M22 | SWAR bucket tags | 8 tags in one 64-bit word, `std::countr_zero` to find the match |
-| M23a | **TCP transport** | required for values larger than a 64 KB datagram, and therefore a prerequisite for M25 and M26. Brings Nagle, delayed ACK and congestion control into scope |
-| M23b | Binary protocol | framed, varint-encoded. Parse cost against text |
-| M24 | Eviction with safe reclamation | CLOCK on the sharded table, where no reclamation is needed, then epoch-based reclamation on the M13a shared baseline, where it is |
-| M25 | Work stealing for large values | large `SET` copies only, never the table. Non-temporal stores so the copy does not evict L3; the effect visible in `cqm_occup_llc`. Proves by measurement why the obvious trick is wrong for the hot path |
-| M26 | Overload behaviour | backpressure, head-of-line blocking and admission control. What the server does at 120% of the M33 knee, recorded rather than guessed |
-| M27 | Spill to disk, two ways | `O_DIRECT` with `posix_memalign`, and memcached's choice of a plain `pwrite` on a dedicated I/O thread with the page cache left in. Checked 2026-11-12: `extstore.c` uses no `O_DIRECT` anywhere, so the kernel-cache approach is not assumed to lose |
-| M28 | PGO, LTO, BOLT | applied to the real `GET` path. Measured, including when it changes nothing |
-| M29 | Two-machine measurement | **BLOCKED.** NIC hardware timestamping and PTP. `/dev/ptp0` here is `iwlwifi-PTP` and useless at microsecond scale; WiFi jitter is milliseconds. Unblocked by: two machines with wired NICs that support hardware timestamping |
-| M30 | TTL and a timing wheel | expiry in O(1), measured against a heap |
-| M31 | Eviction policy study | segmented LRU, CLOCK and TinyLFU compared on hit rate under a realistic key distribution. `memcached`'s `items.c` and `crawler.c` are the reference |
-| M32 | Fragmentation study | slab calcification reproduced on purpose, then fixed |
-| M34 | Fan-out tail study | `multiget` across both shards. The inherited p99 measured against a single-shard request, and a hedged request measured against it |
-
-### Fibers
-
-| # | Milestone | Done when |
-|---|---|---|
-| M14 | Coroutine forwarding | the M12 state machine as a C++20 coroutine. **Check the disassembly for an elided frame allocation**, or a `malloc` has been added to the hot path |
-| M15 | Fiber forwarding | the same path a third way, with real stacks via `boost::context`. Switch cost measured against M14. No reference implementation exists to copy: every coroutine hit in the memcached repository is Lua inside the proxy |
-
----
+**v1 ends here. There is no v2.** Everything that was in v2 — AF_XDP, DPDK,
+eBPF steering, SIMD, TCP, the binary protocol, eviction, persistence,
+coroutines and fibers — was removed from the plan on 2026-11-16. Their topics
+stay in the shared topic list linked from section 7.
 
 ---
 
@@ -987,7 +640,7 @@ matters is the first line of the first table — 64 hours — because that is th
 one that was committed to. Everything else is there so the size of what was
 *not* committed to is visible rather than vague.
 
-## Time, if the whole roadmap were built
+## Time, if the whole of v1 were built
 
 **Assumption: 8 hours a week**, evenings and weekends, as one person with
 C++ experience but no prior networking systems work. Scale everything below
@@ -1004,11 +657,8 @@ a commitment. Read it as a price list.
 | Phase 1 | M3, M4, M5, M6, M6b | **7 to 10 weeks** |
 | Phase 2 | M7, M8, M9, M9b | **4 to 6 weeks** |
 | Phase 3 | M10, M11, M12, M13a, M13b | **7 to 10 weeks** |
-| **v1 total** | **23 milestones** | **24 to 35 weeks — roughly 6 to 8 months** |
-| Phase 4 | M16 to M19 (M20 blocked) | **10 to 14 weeks** |
-| Phase 5 | M21 to M34 | **20 to 30 weeks** |
-| Fibers | M14, M15 | **3 to 4 weeks** |
-| **Everything buildable** | **M0 to M34 less M20, M29** | **57 to 83 weeks — roughly 13 to 19 months** |
+| Phase 4 | M16 | **2 to 3 weeks** |
+| **v1 total** | **24 milestones** | **26 to 38 weeks — roughly 6 to 9 months** |
 
 Two honest notes on these numbers:
 
@@ -1062,68 +712,36 @@ two densest things in the project, and both are in here.
 | Shard model, thread setup, pinning | M10, M11 | 500 | `thread.c` is **830** |
 | SPSC queue, plus the MPSC and MPMC comparisons | M12 | 400 | `rigtorp/SPSCQueue` is about 200 for one queue |
 | Shared baseline and seqlock | M13a, M13b | 300 | — |
+| `io_uring` ring per core, receive and send | M16 | 500 | — |
 | Clock, HdrHistogram wiring, stats | M2 | 300 | — |
-| **Server subtotal** | | **4,150** | |
+| **Server subtotal** | | **4,650** | |
 | Load generator, open-loop UDP | M1a | 400 | — |
 | In-process microbenchmark harness | M2c | 250 | — |
 | Conformance oracle script | M1 | 150 | Python or shell |
 | GoogleTest suite | ongoing | 1,200 | about 30% of server code |
 | CMake, presets, justfile, `env.sh` | M2b | 400 | — |
-| **v1 total** | | **6,500** | |
-
-### Size of v2
-
-| Component | Milestone | Estimate |
-|---|---|---|
-| `io_uring` receive and send path | M16 | 500 |
-| Busy-poll | M17 | 100 |
-| AF_XDP socket plumbing | M18 | 600 |
-| **Userspace Ethernet, ARP, IP, UDP** | M18 | **1,200** |
-| eBPF XDP program and loader | M19 | 400 |
-| SIMD parser, AVX2 | M21 | 400 |
-| SWAR bucket tags | M22 | 150 |
-| TCP transport and connection state | M23a | 700 |
-| Binary protocol | M23b | 400 |
-| Eviction and reclamation | M24, M31 | 900 |
-| Work stealing and non-temporal copy | M25 | 300 |
-| Backpressure and admission control | M26 | 300 |
-| Spill to disk, both ways | M27 | 800 |
-| Timing wheel | M30 | 300 |
-| Fragmentation study | M32 | 200 |
-| Fan-out multiget and hedging | M34 | 350 |
-| Coroutine and fiber forwarding | M14, M15 | 500 |
-| Tests for all of the above | | 1,500 |
-| **v2 total** | | **10,100** |
-| **Everything buildable** | | **16,600** |
+| **v1 total** | | **7,000** | |
 
 ### What the size numbers say
 
 ```
 memcached core, measured:       13,047 code lines (12 .c files)
-lobster v1, estimated:           6,500
-lobster everything, estimated:  16,600
+lobster v1, estimated:           7,000
 ```
 
-The same order of magnitude as memcached, and more in total, because
-memcached's 13k lines contain no load generator, no microbenchmark harness,
-no AF_XDP path and no userspace IP stack — while this has far fewer
-commands.
+About half of memcached, with far fewer commands, but with a load generator
+and a microbenchmark harness that memcached's 13k lines do not contain.
 
-Three things worth noticing:
+Two things worth noticing:
 
-1. **The hash table is 500 lines out of 16,600, about 3%.** The thing the
-   project is nominally about is a rounding error. That is the point: the
+1. **The hash table is 500 lines out of 7,000, about 7%.** The thing the
+   project is nominally about is a small part of it. That is the point: the
    learning is concentrated where the code is thin.
-2. **The largest single item in v2 teaches nothing on the topic list.** The
-   userspace Ethernet, ARP, IP and UDP layer is about 1,200 lines and exists
-   only because AF_XDP hands over raw frames. It is pure tax on M18.
-3. **Tests and harness are about 3,500 lines, 21% of the total.** That ratio
+2. **Tests and harness are about 2,000 lines, 29% of the total.** That ratio
    is right. Much lower, and the rows in NUMBERS.md are not trustworthy.
 
-Treat v1 as plus or minus 30% and v2 as plus or minus 50%. The v1 figure is
-anchored on measured memcached counts for the three components that dominate
-it, so it is the more reliable half. Two v2 items, the IP stack and the eBPF
-program, have no measured anchor at all.
+Treat the v1 figure as plus or minus 30%. It is anchored on measured
+memcached counts for the three components that dominate it.
 
 ## Definition of done
 
@@ -1137,12 +755,9 @@ one `perf c2c` before and after showing false sharing removed; and a
 TSan-clean SPSC queue with tests. About 26 topics ticked. This is a finished,
 defensible project and it is the target.
 
-**Done for v1:** M0 to M13b complete, every v1 topic either ticked or marked
-unmeasurable with the reason. A second two-month block gets most of the way
-there, starting with M12.
-
-A v2 milestone is started because it is wanted, not because the project is
-unfinished without it.
+**Done for v1:** M0 to M13b and M16 complete, every v1 topic either ticked
+or marked unmeasurable with the reason. A second two-month block gets most of
+the way there, starting with M4.
 
 ## Honest limits of the whole roadmap
 
@@ -1178,9 +793,8 @@ one-person project, and nothing in the GoogleTest documentation restricts it
 to unit tests.
 
 - **Tested:** protocol encode and decode round-trips, hash table correctness
-  including collisions, resize and eviction, the slab allocator free list,
-  the SPSC queue under a producer and a consumer, and the SIMD parser against
-  the scalar parser on random input.
+  including collisions, the slab allocator free list, and the SPSC queue
+  under a producer and a consumer.
 - **Tested against an oracle:** M1's conformance script diffs `lobster`
   against real `memcached` on the same command set.
 - **Not tested:** latency. A latency number is not pass or fail; it is a
@@ -1206,14 +820,14 @@ none of this exists.
   its own build directory. TSan is needed by M12 and M13a.
 - **Three executables:** the server, the load generator (M1a), and the
   in-process microbenchmark (M2c).
-- **Flags:** `-march=native` for M21, `-fno-omit-frame-pointer` for M6b
+- **Flags:** `-march=native`, `-fno-omit-frame-pointer` for M6b
   flame graphs. Bake the git SHA and the flag set into the binary so a
   NUMBERS.md row can cite exactly what produced it.
 - **Pin one compiler.** Both GCC 16.2.1 and Clang 23.1.3 are installed, and a
   number from one is not a number from the other.
 - **Dependencies:** HdrHistogram as a pinned submodule in `contrib/` (it is
-  not a system package here). liburing and libbpf are installed and found by
-  `pkg-config`, off by default. **DPDK is never a submodule.**
+  not a system package here). liburing is installed and found by
+  `pkg-config`, off by default.
 - Line 22 of the current file says tests are opt-in while defaulting to `ON`.
   Pick one.
 ## Dependencies
@@ -1221,8 +835,8 @@ none of this exists.
 The language is **C++**, pinned. Standard is **C++23**: everything
 load-bearing — `std::start_lifetime_as`, `std::expected`, `std::atomic_ref`,
 `std::mdspan`, `std::hardware_destructive_interference_size` — is in 23, and
-C++26 is still moving. Compiler is **Clang**, because `llvm-mca` (M21) and
-`llvm-bolt` (M28) come from the same toolchain.
+C++26 is still moving. Compiler is **Clang**, because `llvm-mca` comes from
+the same toolchain.
 
 The hot path is written as "C with templates": no allocation, no virtual
 calls, no exceptions, no standard containers. The comfortable C++ stays in
@@ -1236,14 +850,14 @@ Checked on this machine 2026-11-12 with `pacman -Q` and `pkg-config
 
 | What | Version | Used by |
 |---|---|---|
-| `clang` / `llvm` | 23.1.3 | the whole project; `llvm-mca` for M21, `llvm-bolt` for M28 |
+| `clang` / `llvm` | 23.1.3 | the whole project; `llvm-mca` for reading the probe loop |
 | `gcc` | 16.2.1 | second opinion on codegen only, never for a NUMBERS.md row |
 | `cmake` | 4.4.4 | build |
 | `ninja` | 1.13.2 | build |
 | `just` | 1.59.0 | the `just bench <milestone>` entry point |
 | `gtest` | 1.18.0 | the whole test suite |
 | `liburing` | 2.15 | M16 |
-| `libbpf` | 1.7.0 | M19 |
+| `libbpf` | 1.7.0 | not used: its only user, M19, was removed with v2 |
 | `xxhash` | 0.8.4 | M3 |
 | `numactl` (libnuma) | 2.0.19 | M5. No `.pc` file, so link by name |
 | `hwloc` | 2.15.0 | M2b, M5, M10 — reading the real topology before pinning |
@@ -1253,9 +867,8 @@ Checked on this machine 2026-11-12 with `pacman -Q` and `pkg-config
 | What | Why | Note |
 |---|---|---|
 | `perf` | M6b, and every counter claim in the plan | not installed |
-| `bpftrace` | M6b, M18 — naming the outlier instead of shrugging | not installed |
-| `bpf` / `bpftool` | M19 | not installed |
-| `ethtool` | M11, M18 — queues, offloads, timestamping capability | not installed. Needed to verify several hardware claims in this file |
+| `bpftrace` | M6b — naming the outlier instead of shrugging | not installed |
+| `ethtool` | M11 — queues, offloads, timestamping capability | not installed. Needed to verify several hardware claims in this file |
 | `cpupower` | M2b governor and boost control | not installed |
 | `memcached` | M1, the correctness oracle | not installed |
 | a memcached client library | M1, to drive the oracle diff | `pymemcache` via `uv` is enough |
@@ -1265,35 +878,28 @@ Checked on this machine 2026-11-12 with `pacman -Q` and `pkg-config
 | What | Why not a package |
 |---|---|
 | `HdrHistogram_c` | not an Arch package, and `pkg-config --modversion hdr_histogram` finds nothing. It is C, so `LANGUAGES CXX C` is required in CMakeLists.txt |
-| `libxdp` | not installed and not in `pkg-config`. Needed by M18 |
 
 ### Optional, found by `pkg-config`, off by default
 
-Each guarded by a CMake option so a plain build never needs them:
-`liburing` (M16), `libbpf` + `libxdp` (M18, M19), `boost::context` (M15).
-
-**`boost` is not installed.** M15 needs only `boost::context`, so install
-that component rather than all of Boost.
+Guarded by a CMake option so a plain build never needs it: `liburing` (M16).
 
 ### Explicitly not a dependency
 
 | What | Why |
 |---|---|
-| **DPDK** | not installed, and **never a submodule** — it is a system-level install with its own kernel modules and hugepage setup. M20 is BLOCKED anyway |
-| `memtier_benchmark` | cannot generate UDP requests. M1a replaces it. It would only be useful after M23a adds TCP |
-| `std::simd` | C++26, and **absent from this libstdc++** (verified: `__cpp_lib_simd` undefined). M21 uses `<immintrin.h>` directly |
+| **DPDK** | out of scope, removed with v2 |
+| `memtier_benchmark` | cannot generate UDP requests. M1a replaces it |
+| `std::simd` | SIMD is out of scope, removed with v2. Also C++26, and absent from this libstdc++ (verified: `__cpp_lib_simd` undefined) |
 | Google Benchmark | the `benchmark` package is not installed, and M2c needs latency distributions rather than throughput means. The harness is written by hand |
 | jemalloc / tcmalloc | studied as a topic, but the hot path allocates nothing, so neither is linked |
-| Boost beyond `context` | nothing else in the plan needs it |
+| Boost | nothing in the plan needs it |
 | any async framework | Asio, libevent, and similar. They optimise throughput and ergonomics; this project optimises tail latency |
 
 ### Install line
 
 ```sh
-sudo pacman -S perf bpftrace bpf ethtool cpupower memcached
+sudo pacman -S perf bpftrace ethtool cpupower memcached
 ```
-
-`libxdp` and `boost-context` come from the AUR or are built in `contrib/`.
 
 ## NUMBERS.md
 
@@ -1334,10 +940,10 @@ lobster/
   assets/            logo and social preview
   src/
     main.cpp
-    Net/             sockets, poll loops, io_uring, AF_XDP
-    Protocol/        memcached text and binary, framing, the SIMD parser
+    Net/             sockets, poll loops, io_uring
+    Protocol/        memcached text protocol, framing
     Store/           the hash table and the slab allocator
-    Concurrency/     SPSC queue, seqlock, coroutines, fibers
+    Concurrency/     SPSC queue, seqlock
     Memory/          hugepages, NUMA placement, arenas
     Timing/          clocks, rdtsc, the histogram
     Common/          helpers used everywhere
@@ -1360,21 +966,14 @@ Directories are created when the first file needs them. No empty folders with
 | What | Read it for |
 |---|---|
 | `memcached/memcached` | the design, from the original. Flat layout, no `src/`. Read `assoc.c` (264 code lines: the whole hash table, including incremental resize), `slabs.c` (601), `items.c` (1404) and `thread.c` (830) — 3099 lines in total. Skip `proxy_*.c` and `proto_proxy.c` (10886 lines, a separate Lua-scriptable product). Measured 2026-11-12 at `2d51e36` with `tokei -o json --files` |
-| `memcached/memcached` `extstore.c` | spill to disk without `O_DIRECT`: a plain fd, `pread`, `preadv` and `pwrite`, on a dedicated I/O thread. 780 code lines. The reference for M27 |
 | `scylladb/seastar`, design docs before code | shard per core, share nothing, done properly in production |
 | `rigtorp/SPSCQueue` | about 200 lines that teach false sharing properly |
 | `rigtorp/awesome-lockfree` | the reading list for Phase 3 |
 | `axboe/liburing`, the `examples/` directory | `io_uring` from its author |
-| Linux `Documentation/networking/af_xdp.rst` | kernel bypass with no special hardware |
-| Linux `Documentation/networking/timestamping.rst` | hardware timestamps, for when a second machine exists |
-| `xdp-project/xdp-tutorial` | the `veth` and namespace setup M18 needs |
-| `simdjson/simdjson` | SIMD parsing as a method, not a trick |
 | `HdrHistogram/HdrHistogram_c` | recording latency without lying about the tail |
 | Gil Tene, "How NOT to Measure Latency" | coordinated omission. Watch before writing M1a |
-| Dean and Barroso, "The Tail at Scale" | the M34 argument |
 | Agner Fog's optimisation manuals, AMD's Zen 2 optimisation guide | the microarchitecture reference for Phase 2 |
 | `bpftrace`, `bcc` | finding the p99.9 cause instead of guessing it |
-| `DPDK/dpdk` | read if M20 is ever unblocked. Not before AF_XDP |
 
 Skip tutorials on `select()`. Read `redis/redis` `ae_epoll.c` instead; it is
 shorter than most blog posts about it.
@@ -1396,9 +995,7 @@ nowhere else.
 - Hash function: a hand-written one, or `xxhash`? Leaning `xxhash` at M3, so
   the milestone is about layout rather than the hash, then measuring whether
   the hash shows up at all.
-- Fixed-size or resizable table? Leaning fixed at M3, with resize in M24,
-  because resize is the cold path and it complicates reclamation.
+- Fixed-size or resizable table? Leaning fixed at M3, because resize is the
+  cold path and it complicates reclamation.
 - How many keys fit? 3 GB available, so the "10M entries" figure needs
   recomputing against the real bucket size before M3.
-- Is a second machine worth buying for M20 and M29, or do they stay blocked
-  permanently? Two mini PCs with Intel NICs would unblock both.
