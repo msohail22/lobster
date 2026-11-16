@@ -21,3 +21,6 @@ compile_commands.json
 .DS_Store
 Thumbs.db
 .vibe-wise/
+
+# Local notes, untracked on purpose
+docs/
